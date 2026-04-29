@@ -236,6 +236,11 @@ def inicializar_estado():
         "modo_examen_indice": 0,
         "modo_examen_aciertos": 0,
         "modo_examen_inicio": None,
+        "modo_tutor": True,
+        "nivel_tutor_por_tema": {},
+        "racha_tema": {},
+        "fallos_tema": {},
+        "ultimo_feedback_tutor": "",
     }
     for clave, valor in valores.items():
         if clave not in st.session_state:
@@ -341,6 +346,9 @@ def evaluar_respuesta(respuesta_usuario, ejercicio: Ejercicio):
 
     registrar_historial(ejercicio, respuesta_usuario, correcta)
 
+    if st.session_state.get("modo_tutor", True):
+        ajustar_nivel_tutor(ejercicio, correcta)
+
     nuevas = obtener_nuevas_insignias()
     if nuevas:
         codigo_insignia, _ = nuevas[0]
@@ -377,6 +385,119 @@ def insignias():
     }
     desbloqueadas = set(st.session_state.insignias_desbloqueadas)
     return [texto for codigo, texto in catalogo.items() if codigo in desbloqueadas]
+
+
+
+# =========================================================
+# TUTOR INTELIGENTE BÁSICO
+# =========================================================
+
+def obtener_nivel_tutor(tema: str) -> str:
+    """Nivel adaptativo por tema: basico, medio o avanzado."""
+    return st.session_state.nivel_tutor_por_tema.get(tema, "basico")
+
+
+def dificultad_a_nivel(dificultad: str) -> str:
+    dificultad = dificultad.lower()
+    if "básica" in dificultad or "basica" in dificultad:
+        return "basico"
+    if "media" in dificultad:
+        return "medio"
+    return "avanzado"
+
+
+def ajustar_nivel_tutor(ejercicio: Ejercicio, correcta: bool):
+    """
+    Reglas adaptativas:
+    - 3 aciertos seguidos en un tema: sube un nivel.
+    - 2 fallos seguidos en un tema: baja un nivel y recomienda refuerzo.
+    """
+    tema = ejercicio.tipo
+    niveles = ["basico", "medio", "avanzado"]
+    nivel_actual = obtener_nivel_tutor(tema)
+
+    if correcta:
+        st.session_state.racha_tema[tema] = st.session_state.racha_tema.get(tema, 0) + 1
+        st.session_state.fallos_tema[tema] = 0
+
+        if st.session_state.racha_tema[tema] >= 3:
+            idx = niveles.index(nivel_actual)
+            if idx < len(niveles) - 1:
+                nuevo_nivel = niveles[idx + 1]
+                st.session_state.nivel_tutor_por_tema[tema] = nuevo_nivel
+                st.session_state.ultimo_feedback_tutor = (
+                    f"🧠 Tutor: subiste a nivel {nuevo_nivel} en {tema}. "
+                    "Voy a proponerte retos un poco más exigentes."
+                )
+            else:
+                st.session_state.ultimo_feedback_tutor = (
+                    f"🧠 Tutor: mantenés dominio avanzado en {tema}. "
+                    "Seguí practicando para consolidar."
+                )
+            st.session_state.racha_tema[tema] = 0
+    else:
+        st.session_state.fallos_tema[tema] = st.session_state.fallos_tema.get(tema, 0) + 1
+        st.session_state.racha_tema[tema] = 0
+
+        if st.session_state.fallos_tema[tema] >= 2:
+            idx = niveles.index(nivel_actual)
+            if idx > 0:
+                nuevo_nivel = niveles[idx - 1]
+                st.session_state.nivel_tutor_por_tema[tema] = nuevo_nivel
+                st.session_state.ultimo_feedback_tutor = (
+                    f"🧠 Tutor: detecté dificultad en {tema}. "
+                    f"Bajé temporalmente a nivel {nuevo_nivel} para reforzar paso a paso."
+                )
+            else:
+                st.session_state.ultimo_feedback_tutor = (
+                    f"🧠 Tutor: conviene reforzar {tema} con ejercicios básicos antes de avanzar."
+                )
+            st.session_state.fallos_tema[tema] = 0
+
+
+def elegir_ejercicio_tutor(tema_general: str):
+    """
+    Selecciona una pregunta compatible con el nivel adaptativo del estudiante.
+    Si no hay coincidencia exacta, usa una pregunta normal del tema.
+    """
+    generadores = GENERADORES[tema_general]
+    candidatos = []
+
+    for gen in generadores:
+        ej = gen()
+        nivel_objetivo = obtener_nivel_tutor(ej.tipo)
+        if dificultad_a_nivel(ej.dificultad) == nivel_objetivo:
+            candidatos.append(ej)
+
+    if candidatos:
+        return random.choice(candidatos)
+
+    return random.choice(generadores)()
+
+
+def recomendacion_tutor():
+    if not st.session_state.errores_por_tema:
+        return "🧠 Tutor: empezá practicando por tema. Iré ajustando la dificultad según tus respuestas."
+
+    tema_mas_error = max(st.session_state.errores_por_tema, key=st.session_state.errores_por_tema.get)
+    return (
+        f"🧠 Tutor: el tema que más conviene reforzar ahora es **{tema_mas_error}**. "
+        "Si acumulás aciertos, subiré la dificultad automáticamente."
+    )
+
+
+def mostrar_panel_tutor():
+    st.info(recomendacion_tutor())
+
+    if st.session_state.ultimo_feedback_tutor:
+        st.success(st.session_state.ultimo_feedback_tutor)
+
+    with st.expander("🧠 Ver niveles adaptativos por tema"):
+        if st.session_state.nivel_tutor_por_tema:
+            for tema, nivel in st.session_state.nivel_tutor_por_tema.items():
+                st.write(f"- **{tema}:** {nivel}")
+        else:
+            st.caption("Aún no hay niveles adaptativos registrados. Practica algunos ejercicios.")
 
 
 # =========================================================
@@ -811,6 +932,14 @@ with st.sidebar:
     )
 
     st.divider()
+    st.write("🧠 **Tutor inteligente**")
+    st.session_state.modo_tutor = st.toggle(
+        "Adaptar dificultad automáticamente",
+        value=st.session_state.modo_tutor,
+        help="Sube o baja dificultad según aciertos y errores por tema.",
+    )
+
+    st.divider()
     modo = st.radio(
         "Modo",
         ["Práctica por tema", "Modo examen", "Guía rápida", "Reporte", "Administración"],
@@ -845,16 +974,19 @@ with st.sidebar:
 if modo == "Práctica por tema":
     st.subheader("🎯 Práctica por tema")
 
+    if st.session_state.get("modo_tutor", True):
+        mostrar_panel_tutor()
+
     tema = st.selectbox("Elige un tema", list(GENERADORES.keys()))
 
     if st.session_state.tema_actual != tema:
         st.session_state.tema_actual = tema
-        st.session_state.ejercicio_actual = random.choice(GENERADORES[tema])()
+        st.session_state.ejercicio_actual = elegir_ejercicio_tutor(tema) if st.session_state.get("modo_tutor", True) else random.choice(GENERADORES[tema])()
         st.session_state.respuesta_enviada = False
         st.session_state.feedback = ""
 
     if st.session_state.ejercicio_actual is None:
-        st.session_state.ejercicio_actual = random.choice(GENERADORES[tema])()
+        st.session_state.ejercicio_actual = elegir_ejercicio_tutor(tema) if st.session_state.get("modo_tutor", True) else random.choice(GENERADORES[tema])()
         st.session_state.respuesta_enviada = False
 
     ejercicio = st.session_state.ejercicio_actual
@@ -883,7 +1015,7 @@ if modo == "Práctica por tema":
     with col2:
         if st.button("➡️ Nuevo ejercicio"):
             reiniciar_ejercicio()
-            st.session_state.ejercicio_actual = random.choice(GENERADORES[tema])()
+            st.session_state.ejercicio_actual = elegir_ejercicio_tutor(tema) if st.session_state.get("modo_tutor", True) else random.choice(GENERADORES[tema])()
             st.rerun()
 
     if st.session_state.respuesta_enviada:
@@ -893,6 +1025,9 @@ if modo == "Práctica por tema":
             st.error(st.session_state.feedback)
 
         st.write("💡", ejercicio.explicacion)
+
+        if st.session_state.get("modo_tutor", True) and st.session_state.ultimo_feedback_tutor:
+            st.info(st.session_state.ultimo_feedback_tutor)
 
         if st.session_state.racha >= 3:
             st.balloons()
@@ -939,6 +1074,9 @@ elif modo == "Modo examen":
                     st.session_state.audio_pendiente = random.choice(AUDIOS_DESACIERTO)
 
                 registrar_historial(ejercicio, respuesta, correcta)
+
+                if st.session_state.get("modo_tutor", True):
+                    ajustar_nivel_tutor(ejercicio, correcta)
 
                 nuevas = obtener_nuevas_insignias()
                 if nuevas:
@@ -1046,6 +1184,14 @@ elif modo == "Reporte":
             st.write(f"- **{tema_error}:** {cantidad_error} error(es)")
     else:
         st.success("Todavía no hay errores registrados. ¡Buen inicio!")
+
+    st.divider()
+    st.write("### Estado del tutor inteligente")
+    if st.session_state.get("nivel_tutor_por_tema"):
+        for tema_tutor, nivel_tutor in st.session_state.nivel_tutor_por_tema.items():
+            st.write(f"- **{tema_tutor}:** {nivel_tutor}")
+    else:
+        st.caption("Todavía no hay suficiente práctica para ajustar niveles.")
 
     st.divider()
     st.write("### Últimos ejercicios")

@@ -65,3 +65,15 @@ Reemplazá los archivos dentro de `assets/` por tus audios reales en formato `.m
 - insignia_5.mp3
 - insignia_6.mp3
 - musica_fondo.mp3
+
+
+## Tutor inteligente básico
+
+Esta versión incorpora adaptación automática sin cambiar la estructura del despliegue:
+
+- 3 aciertos seguidos en un tema: sube dificultad.
+- 2 errores seguidos en un tema: baja dificultad y recomienda refuerzo.
+- Puede activarse/desactivarse desde la barra lateral.
+- El reporte muestra el estado adaptativo por tema.
+
+Los nombres de `assets/` se mantienen iguales.
